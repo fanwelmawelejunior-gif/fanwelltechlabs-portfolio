@@ -1,82 +1,127 @@
 require('dotenv').config();
 const express = require('express');
-const { Pool } = require('pg');
-const nodemailer = require('nodemailer');
 const path = require('path');
+const nodemailer = require('nodemailer');
+const { Pool } = require('pg');
 
 const app = express();
+const port =3000;
 
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(__dirname));
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASSWORD,
+  port: process.env.DB_PORT
 });
 
-(async () => {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS contacts (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(50) NOT NULL,
-        email VARCHAR(100),
-        message TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    console.log('Contacts table ready');
-  } catch (err) {
-    console.error('Error creating table:', err.message);
-  }
-})();
 
 const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
+  host: 'smtp.gmail.com',
   port: 587,
   secure: false,
   auth: {
-    user: "fanwelmawelejunior@gmail.com",
-    pass: process.env.GMAIL_APP_PASSWORD
-  }
+    user: process.env.GMAIL_USER || 'fanwelmawelejunior@gmail.com',
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
 });
 
-app.get('/health', (req, res) => res.send('Server is running!'));
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
 
+app.get('/home', (req, res) => {
+  res.sendFile(path.join(__dirname, 'pages', 'index.html'));
+});
+
+app.get('/contact', (req, res) => {
+  res.sendFile(path.join(__dirname, 'pages', 'contact.html'));
+});
+app.get('/solutions', (req, res) => {
+  res.sendFile(path.join(__dirname, 'pages', 'solutions.html'));
+});
+app.get('/about', (req, res) => {
+  res.sendFile(path.join(__dirname, 'pages', 'about.html'));
+});
+app.get('/services', (req, res) => {
+  res.sendFile(path.join(__dirname, 'pages', 'services.html'));
+}); 
 app.post('/submit', async (req, res) => {
-  const { name, email, message } = req.body;
+  const { name, email, subject, message } = req.body || {};
+  const cleanName = String(name || '').trim();
+  const cleanEmail = String(email || '').trim();
+  const cleanSubject = String(subject || '').trim();
+  const cleanMessage = String(message || '').trim();
 
-  if (!name || !email || !message) {
-    return res.status(400).send('Please fill in all fields.');
+  if (!cleanName || !cleanEmail || !cleanSubject || !cleanMessage) {
+    return res.status(400).json({
+      message: 'Please complete the name, email, subject and message fields.',
+    });
+  }
+
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailPattern.test(cleanEmail)) {
+    return res.status(400).json({
+      message: 'Please provide a valid email address.',
+    });
+  }
+
+  if (cleanSubject.length > 100) {
+    return res.status(400).json({
+      message: 'Please keep the subject shorter.',
+    });
+  }
+
+  if (cleanMessage.length < 6) {
+    return res.status(400).json({
+      message: 'Please provide a little more detail in your message.',
+    });
+  }
+
+  if (cleanMessage.length > 4000) {
+    return res.status(400).json({
+      message: 'Your message is too long. Please shorten it and try again.',
+    });
   }
 
   try {
     await pool.query(
-      'INSERT INTO contacts (name, email, message) VALUES ($1, $2, $3)',
-      [name, email, message]
+      'INSERT INTO contacts (name, email, subject, message) VALUES ($1, $2, $3, $4)',
+      [cleanName, cleanEmail, cleanSubject, cleanMessage]
     );
 
-    await transporter.sendMail({
-      from: '"fanwelltechlabs" <fanwelmawelejunior@gmail.com>',
-      to: "fanwelmawelejunior@gmail.com",
-      replyTo: email,
-      subject: `New message from ${name} - FanwellTechLabs`,
-      text: `Name: ${name}\nEmail: ${email}\nMessage: ${message}`
+    if (process.env.GMAIL_APP_PASSWORD) {
+      await transporter.sendMail({
+        from: '"Fanwell Tech Labs" <fanwelmawelejunior@gmail.com>',
+        to: 'fanwelmawelejunior@gmail.com',
+        replyTo: cleanEmail,
+        subject: `New message from ${cleanName} - FanwellTechLabs`,
+        text: `Name: ${cleanName}\nEmail: ${cleanEmail}\nSubject: ${cleanSubject}\nMessage: ${cleanMessage}`,
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Thanks! Your message has been sent successfully.',
     });
-
-    console.log("EMAIL SENT SUCCESSFULLY");
-
-    res.status(200).send('Message received successfully. We will contact you.');
-
-  } catch (err) {
-    console.error('Error in /submit:', err);
-    res.status(500).send('Error saving message or sending email.');
+  } catch (error) {
+    console.error('Error in /submit:', error);
+    return res.status(500).json({
+      message: 'There was a problem sending your message. Please try again in a moment.',
+    });
   }
 });
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'contact.html'));
-});
+async function startServer() {
+  // await ensureContactTable();
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  });
+}
+
+startServer();
